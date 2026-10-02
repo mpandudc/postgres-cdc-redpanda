@@ -1,0 +1,32 @@
+{
+  "started_at": "2026-10-02T22:10:44+0700",
+  "versions": {
+    "postgres": "16.15 (Debian 16.15-1.pgdg13+2)",
+    "clickhouse": "26.8.15.10",
+    "redpanda": "rpk version: v26.2.3",
+    "debezium": "3.6.3.Final"
+  },
+  "connect_downtime_seconds": 28.5,
+  "workload": {
+    "insert": 1857,
+    "update": 1782,
+    "delete": 440,
+    "transactions": 1400
+  },
+  "rows_in_postgres": 1417,
+  "converge_seconds_after_last_write": 4.6,
+  "changelog": {
+    "events": 4028,
+    "distinct_events": 4028,
+    "snapshot_events": 1659,
+    "delete_events": 289,
+    "snapshots": 2,
+    "lag_p50_ms": 4194,
+    "lag_p95_ms": 6047
+  },
+  "replayed_events_after_crash": 0,
+  "reconcile_tombstones": 129,
+  "error_records": 0,
+  "replication_slot": "dbz_orders|t|898728",
+  "finished_at": "2026-10-02T22:11:59+0700"
+}

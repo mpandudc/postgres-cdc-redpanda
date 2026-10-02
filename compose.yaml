@@ -1,0 +1,138 @@
+name: postgres-cdc-redpanda
+
+x-common-security: &common-security
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-16}
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=4
+      - -c
+      - max_wal_senders=4
+      # Bound WAL kept for a stalled slot so a dead connector cannot fill the disk.
+      - -c
+      - max_slot_wal_keep_size=1GB
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: app
+    ports:
+      - "${POSTGRES_PORT:-15432}:5432"
+    volumes:
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - postgres-data:/var/lib/postgresql/data
+    mem_limit: 384m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    <<: *common-security
+
+  redpanda:
+    image: redpandadata/redpanda:${REDPANDA_VERSION:-v26.2.3}
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=768M
+      - --reserve-memory=0M
+      - --overprovisioned
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:${REDPANDA_KAFKA_PORT:-19092}
+      - --rpc-addr=redpanda:33145
+      - --advertise-rpc-addr=redpanda:33145
+    ports:
+      - "${REDPANDA_KAFKA_PORT:-19092}:19092"
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    <<: *common-security
+
+  connect:
+    image: quay.io/debezium/connect:${DEBEZIUM_VERSION:-3.6.3.Final}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP_SERVERS: redpanda:9092
+      GROUP_ID: cdc-connect
+      CONFIG_STORAGE_TOPIC: _connect_configs
+      OFFSET_STORAGE_TOPIC: _connect_offsets
+      STATUS_STORAGE_TOPIC: _connect_status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: "1"
+      # Offsets are committed every 10 s; a crash replays at most that window.
+      CONNECT_OFFSET_FLUSH_INTERVAL_MS: "10000"
+      HEAP_OPTS: -Xms256m -Xmx512m
+    ports:
+      - "${CONNECT_PORT:-18083}:8083"
+    mem_limit: 900m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8083/ >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+    <<: *common-security
+
+  # Web UI: topics, consumer-group lag (clickhouse-orders) and the Debezium
+  # connector's status/config through the Kafka Connect REST API.
+  console:
+    image: redpandadata/console:${REDPANDA_CONSOLE_VERSION:-v3.12.0}
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    environment:
+      CONFIG_FILEPATH: /etc/console/config.yaml
+    volumes:
+      - ./console/config.yaml:/etc/console/config.yaml:ro
+    ports:
+      - "${CONSOLE_PORT:-18088}:8080"
+    mem_limit: 128m
+    <<: *common-security
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:${CLICKHOUSE_VERSION:-26.8}
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-cdc}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-cdc}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "${CLICKHOUSE_HTTP_PORT:-18124}:8123"
+    volumes:
+      - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+      - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    mem_limit: 1500m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    <<: *common-security
+
+volumes:
+  postgres-data:
+  redpanda-data:
+  clickhouse-data:
